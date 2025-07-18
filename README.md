@@ -169,7 +169,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - **Issues**: Report bugs or request features via [GitHub Issues](https://github.com/yourusername/salesforce-contact-verifier/issues)
 - **Discussions**: Ask questions in [GitHub Discussions](https://github.com/yourusername/salesforce-contact-verifier/discussions)
-- **Email**: Contact us at your-email@example.com
+
 
 ## ⚠️ Important Notes
 
