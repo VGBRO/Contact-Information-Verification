@@ -1,0 +1,48 @@
+{
+  "name": "salesforce-contact-verifier",
+  "version": "1.0.0",
+  "description": "Automatically verify Salesforce contacts by searching LinkedIn and other professional networks",
+  "main": "verify-contacts.js",
+  "scripts": {
+    "start": "node verify-contacts.js",
+    "setup": "node setup-fields.js",
+    "test": "npm run test-connection && npm run test-verification",
+    "test-connection": "node test-connection.js",
+    "test-verification": "node verify-contacts.js --limit 1 --dry-run",
+    "dev": "node verify-contacts.js --limit 5",
+    "bulk": "node verify-contacts.js --limit 100"
+  },
+  "keywords": [
+    "salesforce",
+    "contact",
+    "verification",
+    "crm",
+    "linkedin",
+    "automation",
+    "data-quality"
+  ],
+  "author": "Your Name <your.email@example.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yourusername/salesforce-contact-verifier.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/salesforce-contact-verifier/issues"
+  },
+  "homepage": "https://github.com/yourusername/salesforce-contact-verifier#readme",
+  "dependencies": {
+    "jsforce": "^2.0.0",
+    "puppeteer": "^21.5.0",
+    "commander": "^11.1.0",
+    "colors": "^1.4.0",
+    "ora": "^5.4.1"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "eslint": "^8.54.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
