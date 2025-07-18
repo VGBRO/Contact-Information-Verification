@@ -1,0 +1,19 @@
+{
+  "salesforce": {
+    "instanceUrl": "https://yourorg.my.salesforce.com",
+    "clientId": "your_consumer_key_here",
+    "clientSecret": "your_consumer_secret_here",
+    "username": "your_salesforce_username",
+    "password": "your_salesforce_password"
+  },
+  "verification": {
+    "defaultLimit": 10,
+    "defaultMonths": 6,
+    "searchDelay": 3000,
+    "timeout": 15000
+  },
+  "logging": {
+    "level": "info",
+    "logFile": "verification.log"
+  }
+}
