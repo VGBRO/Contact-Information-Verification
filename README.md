@@ -1,197 +1,281 @@
-# Salesforce Contact Verification System
+# AI Agent + Salesforce MCP Server: AI-Powered Contact Verification Demo
 
-A powerful Node.js tool that automatically verifies your Salesforce contacts by searching LinkedIn and other professional networks. Keep your CRM data fresh and accurate with automated contact verification.
+> **A PUBLIC DEMO showcasing how ANY AI Agent can read, verify, and update Salesforce contact data in real-time using the Model Context Protocol (MCP)**
+> This example demonstrates the integration using Claude.
 
-## 🌟 What This Does
+## 🎯 What This Demo Shows
 
-- **Automatically verifies contacts** in your Salesforce org
-- **Searches LinkedIn** and other professional networks to confirm contact information
-- **Updates Salesforce records** with verification status and notes
-- **Handles bulk verification** of hundreds of contacts
-- **Respectful rate limiting** to avoid being blocked by search engines
-- **Multiple search strategies** for better success rates
+This project demonstrates how **Claude can act as an autonomous agent** to:
+- **Connect to Salesforce** through a custom MCP server
+- **Read contact data** from your Salesforce org
+- **Verify contacts** by searching LinkedIn and professional networks  
+- **Update Salesforce records** with verification results
+- **Make intelligent decisions** about data quality and accuracy
 
-## 🚀 Features
+**This is more than just a script** – it's Claude acting as your intelligent CRM assistant!
 
-- ✅ **Multi-engine search**: Uses Google, Bing, and DuckDuckGo for comprehensive results
-- ✅ **Smart matching**: Compares names and companies to determine verification status
-- ✅ **Salesforce integration**: Automatically updates custom fields with results
-- ✅ **Batch processing**: Handles large contact lists efficiently
-- ✅ **Error handling**: Robust error handling and retry logic
-- ✅ **Detailed logging**: See exactly what's happening during verification
-- ✅ **Configurable**: Easy to customize for your specific needs
+## 🚀 Why This Matters
 
-## 📋 Prerequisites
+Traditional CRM tools require manual data entry and verification. This demo shows how **Claude can become your data quality agent**, automatically:
 
-Before you start, you'll need:
-- A computer (Windows, Mac, or Linux)
-- Basic familiarity with command line
-- A Salesforce org (free Developer Edition works great)
-- About 30 minutes for initial setup
+- **Understanding context** about your contacts
+- **Making intelligent searches** across multiple platforms
+- **Reasoning about data quality** and matching accuracy
+- **Taking actions** to keep your CRM fresh and accurate
 
-## 🛠️ Installation
+## 🔧 Architecture Overview
 
-### Step 1: Install Node.js
-Download and install Node.js from [nodejs.org](https://nodejs.org/). Choose the LTS version (recommended for most users).
+┌─────────────┐    MCP Protocol    ┌──────────────┐    Salesforce API    ┌─────────────┐
+│ AI Agent    │◄──────────────────►│              │◄────────────────────►│             │
+│ (Claude,    │                    │ MCP Server   │                      │ Salesforce  │
+│ ChatGPT,    │                    │              │                      │    CRM      │
+│ Perplexity, │                    │              │                      │             │
+│ etc.)       │                    │              │                      │             │
+└─────────────┘                    └──────────────┘                      └─────────────┘
+       │                                  │
+       │                                  │
+       ▼                                  ▼
+┌─────────────┐                    ┌──────────────┐
+│  External   │                    │  LinkedIn &  │
+│  Tools &    │◄───────────────────┤ Professional │
+│  APIs       │                    │  Networks    │
+└─────────────┘                    └──────────────┘
 
-### Step 2: Clone This Repository
+## ✨ Key Features
+
+### 🤖 Claude as an Agent
+- **Autonomous decision-making** about contact verification
+- **Context-aware** reasoning about data quality
+- **Natural language** interaction with your CRM data
+- **Intelligent error handling** and retry logic
+
+### 🔗 MCP Integration
+- **Real-time bi-directional** communication with Salesforce
+- **Secure authentication** through MCP protocol
+- **Efficient data streaming** for large contact lists
+- **Standardized tool interface** for extensibility
+
+### 🎯 Smart Contact Verification
+- **Multi-platform search** (LinkedIn, Duck Duck Go, Google, ZoomInfo, etc)
+- **Intelligent matching** based on name, company, and role
+- **Confidence scoring** for verification results
+- **Automatic record updates** with audit trail
+
+## 🛠️ Prerequisites
+
+Before running this demo, you'll need:
+
+- **Node.js 18+** installed
+- **Claude Desktop** or API access
+- **Salesforce org** (Developer Edition works great)
+- **Basic command line** familiarity
+- **30 minutes** for setup
+
+## ⚡ Quick Start
+
+### 1. Clone & Install
 ```bash
-git clone https://github.com/yourusername/salesforce-contact-verifier.git
-cd salesforce-contact-verifier
-```
-
-### Step 3: Install Dependencies
-```bash
+git clone https://github.com/VGBRO/Contact-Information-Verification.git
+cd Contact-Information-Verification
 npm install
 ```
 
-### Step 4: Set Up Configuration
-1. Copy the example configuration file:
-   ```bash
-   cp config.example.json config.json
-   ```
+### 2. Configure Salesforce
+```bash
+# Copy configuration template
+cp config.example.json config.json
 
-2. Edit `config.json` with your Salesforce credentials (see Configuration section below)
+# Edit with your Salesforce credentials
+nano config.json
+```
 
-## ⚙️ Configuration
+### 3. Set Up MCP Server
+```bash
+# Start the MCP server
+npm run mcp-server
+
+# Server will start on port 3000 by default
+```
+
+### 4. Connect Claude
+Add this MCP server configuration to your Claude Desktop settings:
+
+```json
+{
+  "mcpServers": {
+    "salesforce-verifier": {
+      "command": "node",
+      "args": ["mcp-server.js"],
+      "cwd": "/path/to/your/project"
+    }
+  }
+}
+```
+
+### 5. Start Chatting with Claude!
+Open Claude Desktop and try:
+
+> "Hey Claude, can you check my Salesforce contacts and verify the ones that haven't been updated in the last 6 months?"
+
+## 💬 Example Claude Conversations
+
+### Basic Contact Verification
+```
+You: "Claude, verify my top 10 contacts in Salesforce"
+
+Claude: "I'll help you verify your Salesforce contacts! Let me connect to your org and check the contact data.
+
+Found 247 total contacts. Here are the top 10 by recent activity that need verification:
+
+1. John Smith (Microsoft) - Last verified: Never
+2. Sarah Johnson (Google) - Last verified: 8 months ago
+3. Mike Chen (Salesforce) - Last verified: 4 months ago
+
+Starting verification process...
+
+✅ John Smith: CONFIRMED - Found LinkedIn profile matching Microsoft role
+❓ Sarah Johnson: OUTDATED - LinkedIn shows she's now at Meta, not Google  
+✅ Mike Chen: CONFIRMED - Recent activity on LinkedIn confirms Salesforce role
+
+Updated 3 records in Salesforce with verification results. Would you like me to continue with the remaining contacts?"
+```
+
+### Intelligent Data Analysis
+```
+You: "Which of my contacts have outdated job information?"
+
+Claude: "I've analyzed your Salesforce contacts and cross-referenced with LinkedIn data. Here's what I found:
+
+🔍 OUTDATED CONTACTS (7 found):
+• Sarah Johnson: Salesforce shows 'Google' but LinkedIn shows 'Meta' (updated 3 months ago)
+• David Wilson: Listed as 'Startup Founder' but company was acquired by IBM
+• Lisa Chen: Title shows 'Manager' but LinkedIn indicates recent promotion to 'Director'
+
+Would you like me to update these records automatically, or would you prefer to review each change first?"
+```
+
+## 🔧 Configuration
 
 ### Salesforce Setup
+Create these custom fields on your Contact object:
+- `Last_Verified__c` (Date)
+- `Verification_Status__c` (Picklist: New, CONFIRMED, OUTDATED, UNKNOWN)
+- `Verification_Notes__c` (Long Text Area)
+- `Source_URL__c` (URL)
 
-1. **Create a Connected App** in Salesforce:
-   - Go to Setup → App Manager → New Connected App
-   - Name it "Contact Verifier"
-   - Enable OAuth Settings
-   - Callback URL: `http://localhost:3000/callback`
-   - OAuth Scopes: Select "Full access" and "Perform requests at any time"
-
-2. **Get your credentials**:
-   - Consumer Key and Consumer Secret from your Connected App
-   - Your Salesforce username and password
-   - Your Salesforce instance URL (like `https://yourorg.my.salesforce.com`)
-
-3. **Update config.json**:
-   ```json
-   {
-     "salesforce": {
-       "instanceUrl": "https://yourorg.my.salesforce.com",
-       "clientId": "your_consumer_key_here",
-       "clientSecret": "your_consumer_secret_here",
-       "username": "your_salesforce_username",
-       "password": "your_salesforce_password"
-     }
-   }
-   ```
-
-### Salesforce Custom Fields
-
-The system requires these custom fields on the Contact object:
-
-- **Last_Verified__c** (Date) - When the contact was last verified
-- **Verification_Status__c** (Picklist) - Values: New, CONFIRMED, OUTDATED, UNKNOWN
-- **Verification_Notes__c** (Long Text Area) - Details about the verification
-- **Source_URL__c** (URL) - Link to the source where contact was found
-
-Run the field setup script to create these automatically:
+Run the automated setup:
 ```bash
-node setup-fields.js
+npm run setup-fields
 ```
 
-## 🚀 Usage
-
-### Basic Usage
-Run the verification on all contacts that haven't been verified in the last 6 months:
-```bash
-node verify-contacts.js
+### MCP Server Configuration
+Edit `mcp-config.json`:
+```json
+{
+  "server": {
+    "name": "salesforce-verifier",
+    "version": "1.0.0",
+    "port": 3000
+  },
+  "salesforce": {
+    "instanceUrl": "https://yourorg.my.salesforce.com",
+    "clientId": "your_connected_app_client_id",
+    "clientSecret": "your_connected_app_client_secret"
+  },
+  "verification": {
+    "batchSize": 10,
+    "rateLimit": 2000,
+    "confidenceThreshold": 0.8
+  }
+}
 ```
 
-### Advanced Usage
-```bash
-# Verify only specific contacts
-node verify-contacts.js --limit 50
+## 🎭 Available MCP Tools
 
-# Verify contacts from a specific time period
-node verify-contacts.js --months 3
+Claude has access to these tools through the MCP server:
 
-# Dry run (don't update Salesforce)
-node verify-contacts.js --dry-run
+| Tool | Description | Example Usage |
+|------|-------------|---------------|
+| `get_contacts` | Retrieve contacts from Salesforce | Get all contacts modified in last month |
+| `verify_contact` | Verify a single contact | Check if John Smith still works at Microsoft |
+| `update_contact` | Update contact record | Mark contact as verified with new company info |
+| `search_linkedin` | Search LinkedIn for contact | Find professional profile for Sarah Johnson |
+| `bulk_verify` | Verify multiple contacts | Process 50 contacts in batch |
+| `get_verification_stats` | Get verification statistics | Show summary of last verification run |
+
+## 🔍 How It Works
+
+1. **Claude connects** to the MCP server
+2. **Requests contact data** from Salesforce
+3. **Analyzes each contact** for verification needs
+4. **Searches LinkedIn** and other professional networks
+5. **Compares and matches** data intelligently
+6. **Updates Salesforce records** with results
+7. **Provides summary** and recommendations
+
+## 🚀 Advanced Usage
+
+### Batch Processing
+```javascript
+// Claude can process contacts in intelligent batches
+await claude.tools.bulk_verify({
+  criteria: "Last_Verified__c < LAST_N_MONTHS:6",
+  batchSize: 25,
+  priority: "high_value_contacts"
+});
 ```
 
-### What You'll See
-```
-🚀 Starting Contact Verification System...
-🔐 Connecting to Salesforce...
-✅ Successfully connected to Salesforce!
-📋 Getting contacts to verify...
-📊 Found 25 contacts to verify
-
-🔍 Verifying: John Smith (Microsoft)
-🔍 Trying Google LinkedIn: https://www.google.com/search?q=...
-📊 Google found 3 results
-📊 Result: CONFIRMED - Contact verified via LinkedIn
-
-💾 Updating Salesforce records...
-✅ Updated contact with status: CONFIRMED
-
-📊 VERIFICATION SUMMARY:
-CONFIRMED: 15 contacts
-OUTDATED: 5 contacts
-UNKNOWN: 5 contacts
-
-✅ Verification complete!
+### Custom Verification Logic
+```javascript
+// Extend verification with custom business rules
+await claude.tools.verify_contact({
+  contactId: "003...",
+  customRules: {
+    requireActiveLinkedIn: true,
+    checkCompanyChanges: true,
+    validateEmailDomain: true
+  }
+});
 ```
 
-## 🔧 Customization
+## 🔐 Security & Privacy
 
-### Modify Search Strategies
-Edit the `searchStrategies` array in `verify-contacts.js` to add new search engines or modify existing ones.
-
-### Change Verification Logic
-Update the `verifyContact` method to customize how contacts are matched and verified.
-
-### Adjust Rate Limiting
-Modify the delays between searches in the main verification loop.
+- **Secure MCP protocol** for all communications
+- **OAuth 2.0** authentication with Salesforce
+- **No data storage** - all processing is real-time
+- **Audit trails** for all record modifications
+- **Rate limiting** to respect platform limits
 
 ## 🤝 Contributing
 
-We welcome contributions! Here's how to help:
+We welcome contributions to make this demo even better!
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+1. **Fork** the repository
+2. **Create** a feature branch (`git checkout -b feature/amazing-feature`)
+3. **Commit** your changes (`git commit -m 'Add amazing feature'`)
+4. **Push** to the branch (`git push origin feature/amazing-feature`)
+5. **Open** a Pull Request
 
-## 📝 License
+## 📚 Learn More
+
+- **[Model Context Protocol Documentation](https://spec.modelcontextprotocol.io/)**
+- **[Salesforce API Documentation](https://developer.salesforce.com/docs/apis)**
+- **[Claude Desktop MCP Setup](https://docs.anthropic.com/mcp)**
+
+
+
+## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🆘 Support
+## 🙋‍♀️ Support
 
-- **Issues**: Report bugs or request features via [GitHub Issues](https://github.com/yourusername/salesforce-contact-verifier/issues)
-- **Discussions**: Ask questions in [GitHub Discussions](https://github.com/yourusername/salesforce-contact-verifier/discussions)
-
-
-## ⚠️ Important Notes
-
-- This tool respects rate limits and includes delays to avoid being blocked
-- LinkedIn has anti-scraping measures; results may vary
-- Always test with a small batch first
-- Keep your Salesforce credentials secure
-
-## 🙏 Acknowledgments
-
-- Built with [JSForce](https://jsforce.github.io/) for Salesforce integration
-- Uses [Puppeteer](https://pptr.dev/) for web automation
-- Inspired by the need for accurate CRM data
-
-## 📈 Roadmap
-
-- [ ] Add support for more professional networks
-- [ ] Implement machine learning for better matching
-- [ ] Add web dashboard for monitoring
-- [ ] Create Salesforce Lightning component
-- [ ] Add support for bulk CSV imports
+- **📧 Issues**: [GitHub Issues](https://github.com/VGBRO/Contact-Information-Verification/issues)
+- **💬 Discussions**: [GitHub Discussions](https://github.com/VGBRO/Contact-Information-Verification/discussions)
+- **📖 Documentation**: Check our [Wiki](https://github.com/VGBRO/Contact-Information-Verification/wiki)
 
 ---
 
-**Happy verifying!** 🎉 Keep your contacts fresh and your CRM accurate.
+**Ready to see Claude transform your CRM workflow?** 🚀 
+
+Start the demo and watch Claude become your intelligent data assistant!
