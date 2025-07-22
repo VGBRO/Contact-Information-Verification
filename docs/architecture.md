@@ -1,12 +1,12 @@
 graph TD
-    A["🤖 AI Agent<br/>(Claude, ChatGPT,<br/>Perplexity, etc.)"] 
-    B["⚡ MCP Server"]
-    C["🏢 Salesforce<br/>CRM"]
-    D["🔧 External<br/>Tools & APIs"]
-    E["💼 LinkedIn &<br/>Professional<br/>Networks"]
+    A[AI Agent Claude ChatGPT Perplexity etc] 
+    B[MCP Server]
+    C[Salesforce CRM]
+    D[External Tools APIs]
+    E[LinkedIn Professional Networks]
     
-    A <-->|"MCP Protocol"| B
-    B <-->|"Salesforce API"| C
+    A <--> B
+    B <--> C
     A --> D
     B --> E
     
