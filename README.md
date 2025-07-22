@@ -25,8 +25,11 @@ Traditional CRM tools require manual data entry and verification. This demo show
 
 ## 🔧 Architecture Overview
 
-## Architecture
+
 See our [Architecture Overview](docs/architecture.md) for system design details.
+
+
+
 
 ┌─────────────┐    MCP Protocol    ┌──────────────┐    Salesforce API    ┌─────────────┐
 │ AI Agent    │◄──────────────────►│              │◄────────────────────►│             │
