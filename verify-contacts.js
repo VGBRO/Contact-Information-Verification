@@ -1,43 +1,65 @@
 const jsforce = require('jsforce');
-const puppeteer = require('puppeteer');
 const { program } = require('commander');
 const colors = require('colors');
 const ora = require('ora');
 const fs = require('fs');
 const path = require('path');
+const dns = require('dns').promises;
+const axios = require('axios');
 
-// Load configuration
+// Load configuration with better error handling
 let config;
 try {
   config = require('./config.json');
+  
+  // Validate required configuration
+  if (!config.salesforce || !config.salesforce.instanceUrl || !config.salesforce.clientId) {
+    throw new Error('Missing required Salesforce configuration');
+  }
 } catch (error) {
-  console.error('❌ Error loading config.json. Make sure you copied config.example.json to config.json and filled in your credentials.'.red);
+  console.error('❌ Configuration Error:'.red);
+  console.error('   Make sure config.json exists and contains all required fields.'.red);
+  console.error('   Copy config.example.json to config.json and fill in your credentials.'.red);
   process.exit(1);
 }
 
 // Command line options
 program
-  .version('1.0.0')
+  .version('2.0.0')
   .option('-l, --limit <number>', 'limit number of contacts to verify', '10')
   .option('-m, --months <number>', 'verify contacts not checked in X months', '6')
   .option('-d, --dry-run', 'run without updating Salesforce')
   .option('-v, --verbose', 'verbose logging')
+  .option('-t, --test-email', 'include email validation')
   .parse();
 
 const options = program.opts();
 
-class ContactVerifier {
+class ImprovedContactVerifier {
   constructor() {
+    // Use OAuth connection instead of username/password
     this.conn = new jsforce.Connection({
-      loginUrl: config.salesforce.instanceUrl
+      oauth2: {
+        loginUrl: config.salesforce.instanceUrl,
+        clientId: config.salesforce.clientId,
+        clientSecret: config.salesforce.clientSecret,
+        redirectUri: config.salesforce.redirectUri || 'http://localhost:3000/callback'
+      }
     });
+    
     this.dryRun = options.dryRun;
     this.verbose = options.verbose;
+    this.testEmail = options.testEmail;
+    
+    // Rate limiting configuration
+    this.requestCount = 0;
+    this.lastRequestTime = 0;
+    this.minDelayMs = 1000; // Minimum 1 second between operations
   }
 
   log(message, type = 'info') {
     const timestamp = new Date().toLocaleTimeString();
-    const colors_map = {
+    const colorMap = {
       info: 'cyan',
       success: 'green',
       warning: 'yellow',
@@ -45,20 +67,58 @@ class ContactVerifier {
     };
     
     if (this.verbose || type !== 'info') {
-      console.log(`[${timestamp}] ${message}`[colors_map[type]]);
+      console.log(`[${timestamp}] ${message}`[colorMap[type]]);
     }
+  }
+
+  async enforceRateLimit() {
+    const now = Date.now();
+    const timeSinceLastRequest = now - this.lastRequestTime;
+    
+    if (timeSinceLastRequest < this.minDelayMs) {
+      const delay = this.minDelayMs - timeSinceLastRequest;
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+    
+    this.lastRequestTime = Date.now();
+    this.requestCount++;
   }
 
   async connectToSalesforce() {
     const spinner = ora('Connecting to Salesforce...').start();
     
     try {
-      await this.conn.login(config.salesforce.username, config.salesforce.password);
-      spinner.succeed('Successfully connected to Salesforce!');
-      return true;
+      // Try to use existing access token if available
+      if (config.salesforce.accessToken && config.salesforce.instanceUrl) {
+        this.conn.accessToken = config.salesforce.accessToken;
+        this.conn.instanceUrl = config.salesforce.instanceUrl;
+        
+        // Test the connection
+        await this.conn.identity();
+        spinner.succeed('Successfully connected to Salesforce with existing token!');
+        return true;
+      }
+      
+      // Fall back to username/password if no token (but warn about it)
+      if (config.salesforce.username && config.salesforce.password) {
+        this.log('Warning: Using username/password authentication. Consider switching to OAuth for better security.', 'warning');
+        await this.conn.login(config.salesforce.username, config.salesforce.password);
+        spinner.succeed('Successfully connected to Salesforce!');
+        return true;
+      }
+      
+      spinner.fail('No valid authentication method found');
+      console.error('Please configure either OAuth tokens or username/password in config.json'.red);
+      return false;
+      
     } catch (error) {
       spinner.fail('Failed to connect to Salesforce');
       console.error('Error details:', error.message.red);
+      
+      if (error.message.includes('INVALID_LOGIN')) {
+        console.error('Hint: Check your username, password, and security token'.yellow);
+      }
+      
       return false;
     }
   }
@@ -67,13 +127,16 @@ class ContactVerifier {
     const spinner = ora('Getting contacts to verify...').start();
     
     try {
+      await this.enforceRateLimit();
+      
       const query = `
-        SELECT Id, Name, Account.Name, Title, Email, Last_Verified__c, Verification_Status__c
+        SELECT Id, Name, Account.Name, Title, Email, Phone, Last_Verified__c, 
+               Verification_Status__c, LastModifiedDate, CreatedDate
         FROM Contact 
         WHERE (Last_Verified__c < LAST_N_MONTHS:${options.months} OR Last_Verified__c = null)
         AND AccountId != null 
-        AND Title != null
         AND Name != null
+        AND IsDeleted = false
         ORDER BY LastModifiedDate DESC
         LIMIT ${options.limit}
       `;
@@ -83,7 +146,10 @@ class ContactVerifier {
       
       if (this.verbose) {
         result.records.forEach((contact, index) => {
-          console.log(`${index + 1}. ${contact.Name} (${contact.Account?.Name || 'Unknown Company'})`.gray);
+          const company = contact.Account?.Name || 'Unknown Company';
+          const lastVerified = contact.Last_Verified__c ? 
+            new Date(contact.Last_Verified__c).toDateString() : 'Never';
+          console.log(`${index + 1}. ${contact.Name} (${company}) - Last verified: ${lastVerified}`.gray);
         });
       }
       
@@ -95,197 +161,153 @@ class ContactVerifier {
     }
   }
 
-  async searchLinkedIn(contactName, company) {
-    const spinner = ora(`Searching for ${contactName} at ${company}...`).start();
-    let browser;
-    
+  async validateEmail(email) {
+    if (!email || !this.testEmail) {
+      return { valid: null, reason: 'Email validation disabled' };
+    }
+
     try {
-      browser = await puppeteer.launch({ 
-        headless: true,
-        args: [
-          '--no-sandbox', 
-          '--disable-setuid-sandbox',
-          '--disable-web-security',
-          '--disable-features=VizDisplayCompositor',
-          '--disable-extensions',
-          '--disable-dev-shm-usage',
-          '--disable-accelerated-2d-canvas',
-          '--disable-gpu',
-          '--window-size=1920,1080',
-          '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        ]
-      });
-      
-      const page = await browser.newPage();
-      await page.setViewport({ width: 1920, height: 1080 });
-      await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-      
-      await page.setExtraHTTPHeaders({
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-      });
-      
-      // Search strategies with fallbacks
-      const searchStrategies = [
-        {
-          name: 'Google',
-          url: `https://www.google.com/search?q=${encodeURIComponent(`"${contactName}" "${company}" site:linkedin.com/in`)}`,
-          selector: 'a[href*="linkedin.com/in/"]'
-        },
-        {
-          name: 'DuckDuckGo',
-          url: `https://duckduckgo.com/?q=${encodeURIComponent(`${contactName} ${company} site:linkedin.com/in`)}`,
-          selector: 'a[href*="linkedin.com/in/"]'
-        },
-        {
-          name: 'Bing',
-          url: `https://www.bing.com/search?q=${encodeURIComponent(`"${contactName}" "${company}" site:linkedin.com/in`)}`,
-          selector: 'a[href*="linkedin.com/in/"]'
-        }
-      ];
-      
-      let results = [];
-      
-      for (const strategy of searchStrategies) {
-        try {
-          this.log(`Trying ${strategy.name}...`);
-          
-          // Random delay to appear more human
-          await new Promise(resolve => setTimeout(resolve, Math.random() * 2000 + 1000));
-          
-          await page.goto(strategy.url, { 
-            waitUntil: 'networkidle2',
-            timeout: 15000 
-          });
-          
-          await new Promise(resolve => setTimeout(resolve, 2000));
-          
-          results = await page.evaluate((selector) => {
-            const linkedInLinks = document.querySelectorAll(selector);
-            const foundResults = [];
-            
-            linkedInLinks.forEach(link => {
-              if (link.href && link.href.includes('linkedin.com/in/')) {
-                const parent = link.closest('.g') || 
-                              link.closest('[data-ved]') || 
-                              link.closest('.result') ||
-                              link.closest('article') ||
-                              link.closest('li') ||
-                              link.closest('.b_algo') ||
-                              link.parentElement;
-                
-                if (parent) {
-                  const titleElement = parent.querySelector('h3') || 
-                                    parent.querySelector('h2') || 
-                                    parent.querySelector('.LC20lb') ||
-                                    parent.querySelector('[data-testid="result-title-a"]');
-                  
-                  const snippetElement = parent.querySelector('.VwiC3b') || 
-                                       parent.querySelector('.s') || 
-                                       parent.querySelector('[data-testid="result-snippet"]') ||
-                                       parent.querySelector('.b_caption') ||
-                                       parent.querySelector('.result__snippet');
-                  
-                  foundResults.push({
-                    title: titleElement ? titleElement.textContent.trim() : link.textContent.trim(),
-                    url: link.href,
-                    snippet: snippetElement ? snippetElement.textContent.trim() : ''
-                  });
-                }
-              }
-            });
-            
-            return foundResults.slice(0, 5);
-          }, strategy.selector);
-          
-          if (results.length > 0) {
-            spinner.succeed(`Found ${results.length} potential matches using ${strategy.name}`);
-            break;
-          }
-          
-        } catch (strategyError) {
-          this.log(`${strategy.name} search failed: ${strategyError.message}`, 'warning');
-          continue;
-        }
+      // Basic format validation
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        return { valid: false, reason: 'Invalid email format' };
       }
+
+      // Extract domain
+      const domain = email.split('@')[1];
       
-      if (results.length === 0) {
-        spinner.warn(`No LinkedIn profiles found for ${contactName}`);
+      // DNS MX record check
+      await this.enforceRateLimit();
+      const mxRecords = await dns.resolveMx(domain);
+      
+      if (mxRecords && mxRecords.length > 0) {
+        return { valid: true, reason: 'Domain has valid MX records' };
+      } else {
+        return { valid: false, reason: 'No MX records found for domain' };
       }
-      
-      await browser.close();
-      return results;
       
     } catch (error) {
-      spinner.fail(`Search failed for ${contactName}`);
-      this.log(`Search error: ${error.message}`, 'error');
-      if (browser) await browser.close();
-      return [];
+      return { valid: false, reason: `DNS lookup failed: ${error.code}` };
     }
   }
 
-  async verifyContact(contact) {
+  calculateNameSimilarity(name1, name2) {
+    if (!name1 || !name2) return 0;
+    
+    // Simple similarity scoring
+    const normalize = (str) => str.toLowerCase().trim().replace(/[^a-z\s]/g, '');
+    const n1 = normalize(name1);
+    const n2 = normalize(name2);
+    
+    if (n1 === n2) return 1.0;
+    
+    // Check if all words in one name appear in the other
+    const words1 = n1.split(/\s+/).filter(w => w.length > 1);
+    const words2 = n2.split(/\s+/).filter(w => w.length > 1);
+    
+    if (words1.length === 0 || words2.length === 0) return 0;
+    
+    const matches = words1.filter(word => words2.some(w => w.includes(word) || word.includes(w)));
+    return matches.length / Math.max(words1.length, words2.length);
+  }
+
+  async verifyContactData(contact) {
     const companyName = contact.Account?.Name || 'Unknown Company';
     
-    if (companyName === 'Unknown Company') {
-      return {
-        id: contact.Id,
-        name: contact.Name,
-        status: 'UNKNOWN',
-        notes: 'No company information available for verification',
-        sourceUrl: ''
-      };
+    this.log(`Verifying data quality for ${contact.Name}...`);
+    
+    let verificationStatus = {
+      dataQuality: 'GOOD',
+      issues: [],
+      recommendations: [],
+      confidence: 0.8
+    };
+
+    // Check for missing critical data
+    if (!contact.Name || contact.Name.trim().length < 2) {
+      verificationStatus.issues.push('Name is missing or too short');
+      verificationStatus.dataQuality = 'POOR';
+      verificationStatus.confidence -= 0.3;
     }
-    
-    const searchResults = await this.searchLinkedIn(contact.Name, companyName);
-    
-    let status = 'UNKNOWN';
-    let notes = 'Could not find contact on LinkedIn';
-    let sourceUrl = '';
-    
-    if (searchResults.length > 0) {
-      const bestMatch = searchResults[0];
-      
-      // Matching logic
-      const nameParts = contact.Name.toLowerCase().split(' ');
-      const titleLower = bestMatch.title.toLowerCase();
-      const snippetLower = bestMatch.snippet.toLowerCase();
-      
-      const nameMatch = nameParts.every(part => 
-        titleLower.includes(part) || snippetLower.includes(part)
-      );
-      
-      const companyMatch = snippetLower.includes(companyName.toLowerCase());
-      
-      if (nameMatch && companyMatch) {
-        status = 'CONFIRMED';
-        notes = `Contact verified via LinkedIn. Found: ${bestMatch.title}`;
-        sourceUrl = bestMatch.url;
-      } else if (nameMatch) {
-        status = 'OUTDATED';
-        notes = `Person found but may have changed companies. Current info: ${bestMatch.title}`;
-        sourceUrl = bestMatch.url;
-      } else {
-        status = 'UNKNOWN';
-        notes = `Found LinkedIn results but couldn't confirm match. Best result: ${bestMatch.title}`;
+
+    if (companyName === 'Unknown Company' || !contact.Account?.Name) {
+      verificationStatus.issues.push('No company information available');
+      verificationStatus.dataQuality = 'FAIR';
+      verificationStatus.confidence -= 0.2;
+    }
+
+    if (!contact.Title) {
+      verificationStatus.issues.push('Job title is missing');
+      verificationStatus.recommendations.push('Add job title for better identification');
+      verificationStatus.confidence -= 0.1;
+    }
+
+    // Validate email if present and email testing is enabled
+    if (contact.Email) {
+      const emailValidation = await this.validateEmail(contact.Email);
+      if (emailValidation.valid === false) {
+        verificationStatus.issues.push(`Email issue: ${emailValidation.reason}`);
+        verificationStatus.dataQuality = 'FAIR';
+        verificationStatus.confidence -= 0.2;
+      } else if (emailValidation.valid === true) {
+        verificationStatus.recommendations.push('Email domain appears valid');
       }
+    } else {
+      verificationStatus.recommendations.push('Consider adding email address');
     }
+
+    // Check for stale data
+    const lastModified = new Date(contact.LastModifiedDate);
+    const monthsOld = (Date.now() - lastModified) / (1000 * 60 * 60 * 24 * 30);
     
+    if (monthsOld > 12) {
+      verificationStatus.issues.push(`Contact not updated in ${Math.floor(monthsOld)} months`);
+      verificationStatus.recommendations.push('Consider reaching out to verify current information');
+      verificationStatus.confidence -= 0.1;
+    }
+
+    // Determine overall status
+    if (verificationStatus.issues.length === 0) {
+      verificationStatus.status = 'CONFIRMED';
+    } else if (verificationStatus.issues.length <= 2 && verificationStatus.confidence > 0.5) {
+      verificationStatus.status = 'NEEDS_REVIEW';
+    } else {
+      verificationStatus.status = 'OUTDATED';
+    }
+
     return {
       id: contact.Id,
       name: contact.Name,
-      status: status,
-      notes: notes,
-      sourceUrl: sourceUrl
+      company: companyName,
+      status: verificationStatus.status,
+      confidence: Math.max(0, Math.min(1, verificationStatus.confidence)),
+      issues: verificationStatus.issues,
+      recommendations: verificationStatus.recommendations,
+      notes: this.generateVerificationNotes(verificationStatus),
+      lastModified: contact.LastModifiedDate
     };
+  }
+
+  generateVerificationNotes(verificationStatus) {
+    let notes = [`Data quality assessment: ${verificationStatus.dataQuality}.`];
+    
+    if (verificationStatus.issues.length > 0) {
+      notes.push(`Issues found: ${verificationStatus.issues.join(', ')}.`);
+    }
+    
+    if (verificationStatus.recommendations.length > 0) {
+      notes.push(`Recommendations: ${verificationStatus.recommendations.join(', ')}.`);
+    }
+    
+    notes.push(`Confidence score: ${(verificationStatus.confidence * 100).toFixed(0)}%.`);
+    
+    return notes.join(' ');
   }
 
   async updateSalesforce(verificationResults) {
     if (this.dryRun) {
       console.log('\n🧪 DRY RUN - No updates will be made to Salesforce'.yellow);
+      this.displayResults(verificationResults);
       return;
     }
     
@@ -294,84 +316,179 @@ class ContactVerifier {
     try {
       let successCount = 0;
       let errorCount = 0;
+      const errors = [];
       
-      for (const result of verificationResults) {
-        try {
-          const updateData = {
-            Id: result.id,
-            Verification_Status__c: result.status,
-            Verification_Notes__c: result.notes,
-            Last_Verified__c: new Date().toISOString().split('T')[0]
-          };
-          
-          if (result.sourceUrl) {
-            updateData.Source_URL__c = result.sourceUrl;
+      // Process updates in batches for better performance
+      const batchSize = 10;
+      
+      for (let i = 0; i < verificationResults.length; i += batchSize) {
+        const batch = verificationResults.slice(i, i + batchSize);
+        
+        await this.enforceRateLimit();
+        
+        const updatePromises = batch.map(async (result) => {
+          try {
+            const updateData = {
+              Id: result.id,
+              Verification_Status__c: result.status,
+              Verification_Notes__c: result.notes,
+              Last_Verified__c: new Date().toISOString().split('T')[0]
+            };
+            
+            await this.conn.sobject('Contact').update(updateData);
+            successCount++;
+            this.log(`✅ Updated ${result.name}`);
+            
+          } catch (updateError) {
+            errorCount++;
+            const errorMsg = `Failed to update ${result.name}: ${updateError.message}`;
+            errors.push(errorMsg);
+            this.log(errorMsg, 'error');
           }
-          
-          await this.conn.sobject('Contact').update(updateData);
-          successCount++;
-          
-        } catch (updateError) {
-          errorCount++;
-          this.log(`Failed to update ${result.name}: ${updateError.message}`, 'error');
+        });
+        
+        await Promise.all(updatePromises);
+      }
+      
+      if (errorCount === 0) {
+        spinner.succeed(`Successfully updated all ${successCount} contacts`);
+      } else {
+        spinner.warn(`Updated ${successCount} contacts with ${errorCount} errors`);
+        
+        if (this.verbose && errors.length > 0) {
+          console.log('\nDetailed Errors:'.red);
+          errors.forEach(error => console.log(`  • ${error}`.red));
         }
       }
       
-      spinner.succeed(`Updated ${successCount} contacts (${errorCount} errors)`);
-      
     } catch (error) {
-      spinner.fail('Error updating Salesforce');
-      this.log(`Update error: ${error.message}`, 'error');
+      spinner.fail('Error during Salesforce update');
+      this.log(`Batch update error: ${error.message}`, 'error');
     }
+  }
+
+  displayResults(results) {
+    if (this.dryRun) {
+      console.log('\n📋 RESULTS PREVIEW (Dry Run)'.bold);
+    }
+    
+    results.forEach((result, index) => {
+      const statusEmoji = {
+        'CONFIRMED': '✅',
+        'NEEDS_REVIEW': '⚠️',
+        'OUTDATED': '❌'
+      }[result.status] || '❓';
+      
+      console.log(`\n${index + 1}. ${result.name} (${result.company})`.bold);
+      console.log(`   Status: ${statusEmoji} ${result.status}`.gray);
+      console.log(`   Confidence: ${(result.confidence * 100).toFixed(0)}%`.gray);
+      console.log(`   Notes: ${result.notes}`.gray);
+      
+      if (result.issues.length > 0) {
+        console.log(`   Issues: ${result.issues.join(', ')}`.red);
+      }
+      
+      if (result.recommendations.length > 0) {
+        console.log(`   Recommendations: ${result.recommendations.join(', ')}`.yellow);
+      }
+    });
   }
 
   async generateReport(results) {
     const summary = results.reduce((acc, result) => {
       acc[result.status] = (acc[result.status] || 0) + 1;
+      acc.totalConfidence = (acc.totalConfidence || 0) + result.confidence;
       return acc;
     }, {});
     
+    const avgConfidence = summary.totalConfidence / results.length;
+    
     console.log('\n📊 VERIFICATION SUMMARY'.bold);
-    console.log('='.repeat(50));
+    console.log('='.repeat(60));
     
     Object.entries(summary).forEach(([status, count]) => {
+      if (status === 'totalConfidence') return;
+      
       const percentage = ((count / results.length) * 100).toFixed(1);
       const statusColor = {
         'CONFIRMED': 'green',
-        'OUTDATED': 'yellow',
-        'UNKNOWN': 'red'
+        'NEEDS_REVIEW': 'yellow',
+        'OUTDATED': 'red'
       }[status] || 'white';
       
-      console.log(`${status}: ${count} contacts (${percentage}%)`[statusColor]);
+      console.log(`${status.padEnd(15)}: ${count.toString().padStart(3)} contacts (${percentage.padStart(5)}%)`[statusColor]);
     });
     
-    console.log('='.repeat(50));
+    console.log('='.repeat(60));
     console.log(`Total processed: ${results.length}`.bold);
+    console.log(`Average confidence: ${(avgConfidence * 100).toFixed(1)}%`.bold);
+    console.log(`Processing rate: ${this.requestCount} API calls made`.gray);
     
-    if (this.verbose) {
-      console.log('\n📋 DETAILED RESULTS'.bold);
-      results.forEach((result, index) => {
-        console.log(`${index + 1}. ${result.name} - ${result.status}`.gray);
-        console.log(`   ${result.notes}`.gray);
-        if (result.sourceUrl) {
-          console.log(`   Source: ${result.sourceUrl}`.gray);
-        }
-        console.log('');
-      });
+    // Generate actionable insights
+    console.log('\n💡 INSIGHTS & RECOMMENDATIONS'.bold);
+    
+    const needsReview = results.filter(r => r.status === 'NEEDS_REVIEW').length;
+    const outdated = results.filter(r => r.status === 'OUTDATED').length;
+    
+    if (needsReview > 0) {
+      console.log(`• ${needsReview} contacts need manual review for data quality issues`.yellow);
+    }
+    
+    if (outdated > 0) {
+      console.log(`• ${outdated} contacts are likely outdated and may need outreach`.red);
+    }
+    
+    if (avgConfidence < 0.7) {
+      console.log('• Overall data quality is below optimal - consider data enrichment services'.yellow);
+    }
+    
+    const emailIssues = results.filter(r => 
+      r.issues.some(issue => issue.toLowerCase().includes('email'))
+    ).length;
+    
+    if (emailIssues > 0) {
+      console.log(`• ${emailIssues} contacts have email-related issues`.yellow);
+    }
+  }
+
+  async saveReport(results) {
+    try {
+      const reportData = {
+        timestamp: new Date().toISOString(),
+        summary: results.reduce((acc, result) => {
+          acc[result.status] = (acc[result.status] || 0) + 1;
+          return acc;
+        }, {}),
+        totalProcessed: results.length,
+        averageConfidence: results.reduce((sum, r) => sum + r.confidence, 0) / results.length,
+        details: results
+      };
+      
+      const fileName = `verification-report-${Date.now()}.json`;
+      fs.writeFileSync(fileName, JSON.stringify(reportData, null, 2));
+      
+      console.log(`\n📄 Report saved to: ${fileName}`.green);
+      
+    } catch (error) {
+      this.log(`Failed to save report: ${error.message}`, 'error');
     }
   }
 }
 
-// Main execution
+// Main execution function
 async function main() {
-  console.log('🚀 Salesforce Contact Verification System'.bold.blue);
-  console.log('==========================================\n');
+  console.log('🚀 Improved Salesforce Contact Verification System v2.0'.bold.blue);
+  console.log('========================================================\n');
   
   if (options.dryRun) {
-    console.log('🧪 Running in DRY RUN mode - no changes will be made'.yellow);
+    console.log('🧪 Running in DRY RUN mode - no changes will be made to Salesforce'.yellow);
   }
   
-  const verifier = new ContactVerifier();
+  if (options.testEmail) {
+    console.log('📧 Email validation enabled'.cyan);
+  }
+  
+  const verifier = new ImprovedContactVerifier();
   
   // Connect to Salesforce
   const connected = await verifier.connectToSalesforce();
@@ -395,50 +512,82 @@ async function main() {
     const contact = contacts[i];
     console.log(`\n[${i + 1}/${contacts.length}] Processing: ${contact.Name}`.bold);
     
-    const result = await verifier.verifyContact(contact);
-    results.push(result);
-    
-    // Progress indicator
-    const statusEmoji = {
-      'CONFIRMED': '✅',
-      'OUTDATED': '⚠️',
-      'UNKNOWN': '❓'
-    }[result.status] || '❓';
-    
-    console.log(`${statusEmoji} ${result.status}: ${result.notes}`.gray);
-    
-    // Respectful delay between requests
-    if (i < contacts.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, 3000));
+    try {
+      const result = await verifier.verifyContactData(contact);
+      results.push(result);
+      
+      // Progress indicator
+      const statusEmoji = {
+        'CONFIRMED': '✅',
+        'NEEDS_REVIEW': '⚠️',
+        'OUTDATED': '❌'
+      }[result.status] || '❓';
+      
+      console.log(`${statusEmoji} ${result.status} (${(result.confidence * 100).toFixed(0)}% confidence)`.gray);
+      
+    } catch (error) {
+      verifier.log(`Error processing ${contact.Name}: ${error.message}`, 'error');
+      
+      // Add error result so we don't lose track
+      results.push({
+        id: contact.Id,
+        name: contact.Name,
+        company: contact.Account?.Name || 'Unknown',
+        status: 'ERROR',
+        confidence: 0,
+        issues: ['Processing error occurred'],
+        recommendations: ['Manual review required'],
+        notes: `Error during verification: ${error.message}`,
+        lastModified: contact.LastModifiedDate
+      });
     }
   }
   
   // Update Salesforce
   await verifier.updateSalesforce(results);
   
-  // Generate report
+  // Generate and display report
   await verifier.generateReport(results);
   
+  // Save detailed report
+  await verifier.saveReport(results);
+  
   console.log('\n🎉 Verification complete!'.green.bold);
+  console.log('Check the generated report file for detailed results.'.gray);
 }
 
-// Handle errors gracefully
+// Improved error handling
 process.on('uncaughtException', (error) => {
-  console.error('💥 Unexpected error:', error.message.red);
+  console.error('💥 Unexpected error occurred:'.red);
+  console.error(`   ${error.message}`.red);
+  console.error('   The application will now exit safely.'.red);
   process.exit(1);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('💥 Unhandled promise rejection:', reason);
+  console.error('💥 Unhandled promise rejection:'.red);
+  console.error(`   ${reason}`.red);
+  console.error('   The application will now exit safely.'.red);
   process.exit(1);
+});
+
+// Graceful shutdown
+process.on('SIGINT', () => {
+  console.log('\n⏹️ Received interrupt signal. Shutting down gracefully...'.yellow);
+  process.exit(0);
 });
 
 // Run the program
 if (require.main === module) {
   main().catch(error => {
-    console.error('💥 Fatal error:', error.message.red);
+    console.error('💥 Fatal error during execution:'.red);
+    console.error(`   ${error.message}`.red);
+    if (error.stack) {
+      console.error('   Stack trace:'.gray);
+      console.error(`   ${error.stack}`.gray);
+    }
     process.exit(1);
   });
 }
 
-module.exports = ContactVerifier;
+module.exports = ImprovedContactVerifier;
