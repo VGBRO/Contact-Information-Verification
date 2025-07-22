@@ -31,6 +31,8 @@ See our [Architecture Overview](docs/architecture.md) for system design details.
 
 
 
+
+
 ┌─────────────┐    MCP Protocol    ┌──────────────┐    Salesforce API    ┌─────────────┐
 │ AI Agent    │◄──────────────────►│              │◄────────────────────►│             │
 │ (Claude,    │                    │ MCP Server   │                      │ Salesforce  │
